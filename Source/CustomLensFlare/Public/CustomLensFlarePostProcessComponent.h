@@ -28,7 +28,7 @@ public:
 #endif
 	// --
 
-	UFUNCTION(BlueprintCallable)
+	UFUNCTION(BlueprintCallable, Category = "CustomLensFlares")
 	void SetWeight(float NewWeight);
 protected:
 	void RemoveBlendable(UCustomLensFlareConfig* ConfigToRemove) const;
