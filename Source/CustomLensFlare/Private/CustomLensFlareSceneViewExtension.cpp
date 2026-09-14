@@ -576,6 +576,13 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 		return {};
 
 	const FCustomLensFlareSceneViewExtensionData::FPerViewExtensionData* PerViewExtensionData = GetPerViewExtensionData(View);
+	if (PerViewExtensionData == nullptr)
+	{
+		// No per-view data for this view (e.g. an offscreen render capture that didn't go through
+		// SetupViewFamily/SetupView). Skip the lens flare entirely and pass the scene color through
+		// unchanged so the underlying bloom result is preserved.
+		return FScreenPassTexture(SceneColor.TextureSRV->GetParent(), SceneColor.ViewRect);
+	}
 
 	RDG_GPU_STAT_SCOPE(GraphBuilder, CustomBloomFlares)
 	RDG_EVENT_SCOPE(GraphBuilder, "CustomBloomFlares");
@@ -774,9 +781,17 @@ void FCustomLensFlareSceneViewExtension::InitStates()
 
 const FCustomLensFlareSceneViewExtensionData::FPerViewExtensionData* FCustomLensFlareSceneViewExtension::GetPerViewExtensionData(const FSceneView& View)
 {
+	// The family extension data is created in SetupViewFamily()/SetupView(). For offscreen render
+	// captures (e.g. material baking during HLOD/proxy mesh generation, asset thumbnails) those
+	// callbacks don't run for this family, so the data is absent. The lens flare is a purely
+	// cosmetic screen-space effect that has no place in such captures - return null and let callers
+	// skip it rather than dereferencing a null pointer and crashing.
 	const FCustomLensFlareSceneViewExtensionData* CustomLensFlareSceneViewExtensionData = View.Family->GetExtentionData<FCustomLensFlareSceneViewExtensionData>();
-	const FCustomLensFlareSceneViewExtensionData::FPerViewExtensionData* PerViewExtensionData = CustomLensFlareSceneViewExtensionData->GetViewExtensionData(View);
-	return PerViewExtensionData;
+	if (CustomLensFlareSceneViewExtensionData == nullptr)
+	{
+		return nullptr;
+	}
+	return CustomLensFlareSceneViewExtensionData->GetViewExtensionData(View);
 }
 
 
