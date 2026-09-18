@@ -576,6 +576,13 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 		return {};
 
 	const FCustomLensFlareSceneViewExtensionData::FPerViewExtensionData* PerViewExtensionData = GetPerViewExtensionData(View);
+	if (PerViewExtensionData == nullptr)
+	{
+		// No per-view data for this view (e.g. an offscreen render capture that didn't go through
+		// SetupViewFamily/SetupView). Skip the lens flare entirely and pass the scene color through
+		// unchanged so the underlying bloom result is preserved.
+		return FScreenPassTexture(SceneColor.TextureSRV->GetParent(), SceneColor.ViewRect);
+	}
 
 	RDG_GPU_STAT_SCOPE(GraphBuilder, CustomBloomFlares)
 	RDG_EVENT_SCOPE(GraphBuilder, "CustomBloomFlares");
@@ -622,13 +629,13 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 	if (SceneColorViewport.Rect.Width() != SceneColorViewport.Extent.X
 		|| SceneColorViewport.Rect.Height() != SceneColorViewport.Extent.Y)
 	{
-		const FString SceneColorRescalePassName(TEXT("SceneColorRescale"));
+		const TCHAR* SceneColorRescalePassName(TEXT("SceneColorRescale"));
 
 		// Build texture
 		FRDGTextureDesc Desc = SceneColor.TextureSRV->GetParent()->Desc;
 		Desc.Reset();
 		Desc.Extent = SceneColorViewport.Rect.Size();
-		FRDGTextureRef RescaleTexture = GraphBuilder.CreateTexture(Desc, *SceneColorRescalePassName);
+		FRDGTextureRef RescaleTexture = GraphBuilder.CreateTexture(Desc, SceneColorRescalePassName);
 		AddCopyTexturePass(GraphBuilder, SceneColor.TextureSRV->GetParent(), RescaleTexture,
 			SceneColor.ViewRect.Min, FIntPoint::ZeroValue, SceneColor.ViewRect.Size());
 
@@ -667,7 +674,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 	{
 		RDG_EVENT_SCOPE(GraphBuilder, "MixPass");
 
-		const FString MixPassName(TEXT("Mix"));
+		const TCHAR* MixPassName(TEXT("Mix"));
 
 		float BloomIntensity = PerViewExtensionData->Intensity * View.FinalPostProcessSettings.BloomIntensity;
 
@@ -693,7 +700,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 		Description.Extent = MixViewport.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Black);
-		MixTexture = GraphBuilder.CreateTexture(Description, *MixPassName);
+		MixTexture = GraphBuilder.CreateTexture(Description, MixPassName);
 
 		// Render shader
 		TShaderMapRef<FCustomScreenPassVS> VertexShader(View.ShaderMap);
@@ -774,9 +781,17 @@ void FCustomLensFlareSceneViewExtension::InitStates()
 
 const FCustomLensFlareSceneViewExtensionData::FPerViewExtensionData* FCustomLensFlareSceneViewExtension::GetPerViewExtensionData(const FSceneView& View)
 {
+	// The family extension data is created in SetupViewFamily()/SetupView(). For offscreen render
+	// captures (e.g. material baking during HLOD/proxy mesh generation, asset thumbnails) those
+	// callbacks don't run for this family, so the data is absent. The lens flare is a purely
+	// cosmetic screen-space effect that has no place in such captures - return null and let callers
+	// skip it rather than dereferencing a null pointer and crashing.
 	const FCustomLensFlareSceneViewExtensionData* CustomLensFlareSceneViewExtensionData = View.Family->GetExtentionData<FCustomLensFlareSceneViewExtensionData>();
-	const FCustomLensFlareSceneViewExtensionData::FPerViewExtensionData* PerViewExtensionData = CustomLensFlareSceneViewExtensionData->GetViewExtensionData(View);
-	return PerViewExtensionData;
+	if (CustomLensFlareSceneViewExtensionData == nullptr)
+	{
+		return nullptr;
+	}
+	return CustomLensFlareSceneViewExtensionData->GetViewExtensionData(View);
 }
 
 
@@ -793,7 +808,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderThreshold(FRDGBuild
 	FIntRect Viewport4 = Viewport2 / 2;
 
 	{
-		const FString PassName(TEXT("LensFlareDownsample"));
+		const TCHAR* PassName(TEXT("LensFlareDownsample"));
 
 		// Build texture
 		FRDGTextureDesc Description = InputTexture.Texture->Desc;
@@ -801,7 +816,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderThreshold(FRDGBuild
 		Description.Extent = Viewport4.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Black);
-		FRDGTextureRef Texture = GraphBuilder.CreateTexture(Description, *PassName);
+		FRDGTextureRef Texture = GraphBuilder.CreateTexture(Description, PassName);
 
 		// Render shader
 		TShaderMapRef<FCustomScreenPassVS> VertexShader(View.ShaderMap);
@@ -857,7 +872,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 	FRDGTextureRef ChromaTexture = nullptr;
 
 	{
-		const FString PassName(TEXT("LensFlareChromaGhost"));
+		const TCHAR* PassName(TEXT("LensFlareChromaGhost"));
 
 		// Build buffer
 		FRDGTextureDesc Description = BloomTexture.TextureSRV->GetParent()->Desc;
@@ -865,7 +880,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 		Description.Extent = Viewport2.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Black);
-		ChromaTexture = GraphBuilder.CreateTexture(Description, *PassName);
+		ChromaTexture = GraphBuilder.CreateTexture(Description, PassName);
 
 		// Shader parameters
 		TShaderMapRef<FCustomScreenPassVS> VertexShader(View.ShaderMap);
@@ -891,7 +906,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 	}
 
 	{
-		const FString PassName(TEXT("LensFlareGhosts"));
+		const TCHAR* PassName(TEXT("LensFlareGhosts"));
 
 		// Build buffer
 		FRDGTextureDesc Description = BloomTexture.TextureSRV->GetParent()->Desc;
@@ -899,7 +914,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 		Description.Extent = Viewport2.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Transparent);
-		FRDGTextureRef Texture = GraphBuilder.CreateTexture(Description, *PassName);
+		FRDGTextureRef Texture = GraphBuilder.CreateTexture(Description, PassName);
 
 		// Shader parameters
 		TShaderMapRef<FCustomScreenPassVS> VertexShader(View.ShaderMap);
@@ -946,7 +961,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 
 	{
 		// Render shader
-		const FString PassName(TEXT("LensFlareHalo"));
+		const TCHAR* PassName(TEXT("LensFlareHalo"));
 
 		TShaderMapRef<FCustomScreenPassVS> VertexShader(View.ShaderMap);
 		TShaderMapRef<FLensFlareHaloPS> PixelShader(View.ShaderMap);
@@ -1000,7 +1015,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderGlare(FRDGBuilder& 
 	// Only render the Glare if its intensity is different from 0
 	if (PerViewExtensionData->GlareIntensity > SMALL_NUMBER)
 	{
-		const FString LensFlareGlarePassName(TEXT("LensFlareGlare"));
+		const TCHAR* LensFlareGlarePassName(TEXT("LensFlareGlare"));
 
 		// This compute the number of point that will be drawn
 		// Since we want one point for 2 by 2 pixel block we just 
@@ -1024,7 +1039,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderGlare(FRDGBuilder& 
 		Description.Extent = Viewport4.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Transparent);
-		FRDGTextureRef GlareTexture = GraphBuilder.CreateTexture(Description, *LensFlareGlarePassName);
+		FRDGTextureRef GlareTexture = GraphBuilder.CreateTexture(Description, LensFlareGlarePassName);
 
 		// Setup a few other variables that will 
 		// be needed by the shaders.
@@ -1080,7 +1095,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderGlare(FRDGBuilder& 
 		FRHIBlendState* BlendState = this->AdditiveBlendState;
 
 		GraphBuilder.AddPass(
-			RDG_EVENT_NAME("%s", *LensFlareGlarePassName),
+			RDG_EVENT_NAME("%s", LensFlareGlarePassName),
 			VertexParameters,
 			ERDGPassFlags::Raster,
 			[
@@ -1134,8 +1149,8 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderBlur(FRDGBuilder& G
 	FRDGTextureRef PreviousBuffer = InputTexture.Texture;
 	const FRDGTextureDesc& InputDescription = InputTexture.Texture->Desc;
 
-	const FString PassDownName = TEXT("Down");
-	const FString PassUpName = TEXT("Up");
+	const TCHAR* PassDownName = TEXT("Down");
+	const TCHAR* PassUpName = TEXT("Up");
 	const int32 ArraySize = BlurSteps * 2;
 
 	// Viewport resolutions
@@ -1180,16 +1195,17 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderBlur(FRDGBuilder& G
 			Viewports[i].Height()
 			);
 
+		const bool bIsDownSampling = i < BlurSteps;
 		const FString PassName =
 			FString(TEXT("KawaseBlur"))
 			+ FString::Printf(TEXT("_%i_"), i)
-			+ ((i < BlurSteps) ? PassDownName : PassUpName)
+			+ (bIsDownSampling ? PassDownName : PassUpName)
 			+ FString::Printf(TEXT("_%ix%i"), Viewports[i].Width(), Viewports[i].Height());
 
-		FRDGTextureRef Buffer = GraphBuilder.CreateTexture(BlurDesc, *PassName);
+		FRDGTextureRef Buffer = GraphBuilder.CreateTexture(BlurDesc, bIsDownSampling ? TEXT("KawaseBlurDownSamplingBuffer") : TEXT("KawaseBlurUpSamplingBuffer"));
 
 		// Render shader
-		if (i < BlurSteps)
+		if (bIsDownSampling)
 		{
 			FKawaseBlurDownPS::FParameters* PassDownParameters = GraphBuilder.AllocParameters<
 				FKawaseBlurDownPS::FParameters>();
@@ -1348,7 +1364,7 @@ FScreenPassTextureSlice FCustomLensFlareSceneViewExtension::FBloomFlareProcess::
 	Description.Extent = Viewport.Size();
 	Description.Format = PF_FloatRGB;
 	Description.ClearValue = FClearValueBinding(FLinearColor::Black);
-	FRDGTextureRef TargetTexture = GraphBuilder.CreateTexture(Description, *PassName);
+	FRDGTextureRef TargetTexture = GraphBuilder.CreateTexture(Description, TEXT("DownsampleTarget"));
 
 	// Render shader
 	TShaderMapRef<FCustomScreenPassVS> VertexShader(View.ShaderMap);
@@ -1387,7 +1403,7 @@ FScreenPassTextureSlice FCustomLensFlareSceneViewExtension::FBloomFlareProcess::
 	Description.Extent = InputTexture.ViewRect.Size();
 	Description.Format = PF_FloatRGB;
 	Description.ClearValue = FClearValueBinding(FLinearColor::Black);
-	FRDGTextureRef TargetTexture = GraphBuilder.CreateTexture(Description, *PassName);
+	FRDGTextureRef TargetTexture = GraphBuilder.CreateTexture(Description, TEXT("UpsampleCombineTarget"));
 
 	TShaderMapRef<FCustomScreenPassVS> VertexShader(View.ShaderMap);
 	TShaderMapRef<FUpsampleCombinePS> PixelShader(View.ShaderMap);

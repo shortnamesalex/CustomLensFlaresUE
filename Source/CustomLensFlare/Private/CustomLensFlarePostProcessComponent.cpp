@@ -78,13 +78,15 @@ void UCustomLensFlarePostProcessComponent::SetWeight(float NewWeight)
 #if WITH_EDITOR
 	LastUsedConfig = CustomLensFlareConfig;
 #endif
-
-	if (APostProcessVolume* PostProcessVolumeOwner = GetOwner<APostProcessVolume>())
+	if (GetOwner())
 	{
-		PostProcessVolumeOwner->AddOrUpdateBlendable(CustomLensFlareConfig, NewWeight);
-	}
-	else if (UPostProcessComponent* PostProcessComponent = GetOwner()->GetComponentByClass<UPostProcessComponent>())
-	{
-		PostProcessComponent->AddOrUpdateBlendable(CustomLensFlareConfig, NewWeight);
+		if (APostProcessVolume* PostProcessVolumeOwner = GetOwner<APostProcessVolume>())
+		{
+			PostProcessVolumeOwner->AddOrUpdateBlendable(CustomLensFlareConfig, NewWeight);
+		}
+		else if (UPostProcessComponent* PostProcessComponent = GetOwner()->GetComponentByClass<UPostProcessComponent>())
+		{
+			PostProcessComponent->AddOrUpdateBlendable(CustomLensFlareConfig, NewWeight);
+		}
 	}
 }
