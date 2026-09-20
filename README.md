@@ -1,4 +1,6 @@
-﻿
+This fork is mainly a quality-of-life thing, adding in some extra textures and ironing out weird quirks. No big changes are planned and this fork will be updated alongside the original repository.
+
+# ORIGINAL DESCRIPTION
 ![Lens Flares Screenshot in Editor](screenshot.png)
 
 Based on [Custom Lens-Flare Post-Process in Unreal Engine](https://www.froyok.fr/blog/2021-09-ue4-custom-lens-flare/)
