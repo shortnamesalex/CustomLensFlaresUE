@@ -1,4 +1,6 @@
 This fork is mainly a quality-of-life thing, adding in some extra textures and ironing out weird quirks. No big changes are planned and this fork will be updated alongside the original repository.
+<img width="2559" height="1371" alt="image" src="https://github.com/user-attachments/assets/5646f496-9450-496b-9106-6f983205d2f4" />
+
 
 # ORIGINAL DESCRIPTION
 ![Lens Flares Screenshot in Editor](screenshot.png)
