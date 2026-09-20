@@ -2,7 +2,7 @@
 	"FileVersion": 3,
 	"Version": 1,
 	"VersionName": "1.0",
-	"FriendlyName": "CustomLensFlare",
+	"FriendlyName": "Custom Lens Flare",
 	"Description": "Implementation of Froyok's lens flare concept in Unreal Engine 5",
 	"Category": "Other",
 	"CreatedBy": "Manuel Wagner <singinwhale@singinwhale.com>",
@@ -10,14 +10,16 @@
 	"DocsURL": "",
 	"MarketplaceURL": "",
 	"CanContainContent": true,
-	"IsBetaVersion": true,
+	"IsBetaVersion": false,
 	"IsExperimentalVersion": false,
 	"Installed": false,
+	"EnabledByDefault": true,
 	"Modules": [
 		{
 			"Name": "CustomLensFlare",
 			"Type": "Runtime",
 			"LoadingPhase": "PostConfigInit"
 		}
-	]
+	],
+	"SupportURL": ""
 }
