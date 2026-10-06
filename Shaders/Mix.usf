@@ -42,7 +42,7 @@ void MixPS(
     // Flares
     if( MixPass.y )
     {
-        Flares = Texture2DSample( InputTexture, InputSampler, UV ).rgb;
+        Flares = SampleInput( UV );
     }
 
     // Glares
@@ -60,7 +60,8 @@ void MixPS(
         UNROLL
         for( int i = 0; i < 4; i++ )
         {
-            float2 OffsetUV = UV + GlarePixelSize * Coords[i];
+            // GlareTexture is used in full, so saturate is enough.
+            float2 OffsetUV = saturate( UV + GlarePixelSize * Coords[i] );
             GlareColor.rgb += 0.25f * Texture2DSample( GlareTexture, InputSampler, OffsetUV ).rgb;
         }
 

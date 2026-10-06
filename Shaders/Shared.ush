@@ -8,6 +8,36 @@
 #include "/Engine/Private/ScreenPass.ush"
 #include "/Engine/Private/PostProcessCommon.ush"
 
+// InputTexture is often a sub-region of a larger buffer, so a 0..1 UV must be mapped to it.
+SCREEN_PASS_TEXTURE_VIEWPORT(Input)
+
 Texture2D InputTexture;
 SamplerState InputSampler;
-float2 InputViewportSize;
+
+// - Input viewport sampling
+
+/** Map a 0..1 pass UV onto the sub-region of InputTexture that the input viewport uses. */
+float2 InputUV(float2 UV)
+{
+	return Input_UVViewportMin + UV * Input_UVViewportSize;
+}
+
+/** Clamp an input UV to the bilinear-safe bounds of the input viewport. */
+float2 ClampInputUV(float2 InUV)
+{
+	return clamp(InUV, Input_UVViewportBilinearMin, Input_UVViewportBilinearMax);
+}
+
+/** Map and clamp a 0..1 pass UV to the input viewport. Use it for every kernel tap. */
+float2 ClampedInputUV(float2 UV)
+{
+	return ClampInputUV(InputUV(UV));
+}
+
+/** Sample InputTexture with a 0..1 pass UV mapped and clamped to the input viewport. */
+float3 SampleInput(float2 UV)
+{
+	return Texture2DSampleLevel(InputTexture, InputSampler, ClampedInputUV(UV), 0).rgb;
+}
+
+// --

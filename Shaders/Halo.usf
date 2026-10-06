@@ -52,9 +52,9 @@ void HaloPS(
 	float2 UVb = (FishUV - CenterPoint) * (1.0f - ChromaShift) + CenterPoint + HaloVector;
 
 	// Sampling
-	OutColor.r = Texture2DSample( InputTexture, InputSampler, UVr ).r;
-	OutColor.g = Texture2DSample( InputTexture, InputSampler, UVg ).g;
-	OutColor.b = Texture2DSample( InputTexture, InputSampler, UVb ).b;
+	OutColor.r = SampleInput(UVr).r;
+	OutColor.g = SampleInput(UVg).g;
+	OutColor.b = SampleInput(UVb).b;
 
 	OutColor.rgb *= ScreenborderMask * HaloMask * Intensity;
 

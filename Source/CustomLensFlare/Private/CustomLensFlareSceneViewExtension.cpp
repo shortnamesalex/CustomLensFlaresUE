@@ -5,8 +5,11 @@
 #include "CustomLensFlare.h"
 #include "CustomLensFlareConfig.h"
 #include "CustomLensFlareSceneViewExtensionData.h"
+#include "Engine/Texture2D.h"
+#include "Misc/ConfigCacheIni.h"
 #include "SceneRendering.h"
 #include "ScreenPass.h"
+#include "TextureResource.h"
 #include "PostProcess/PostProcessing.h"
 #include "PostProcess/SceneFilterRendering.h"
 
@@ -131,7 +134,8 @@ namespace
 	}
 
 	// The function that draw a shader into a given RenderGraph texture
-	// with the input texture having a different viewport than the target
+	// with the input texture having a different viewport than the target.
+	// The UVs go from 0 to 1, and the shader maps them to its input viewport.
 	template <typename TShaderParameters, typename TShaderClassVertex, typename TShaderClassPixel>
 	void DrawSplitResolutionPass(
 		FRDGBuilder& GraphBuilder,
@@ -140,7 +144,6 @@ namespace
 		TShaderMapRef<TShaderClassVertex> VertexShader,
 		TShaderMapRef<TShaderClassPixel> PixelShader,
 		FRHIBlendState* BlendState,
-		const FScreenPassTextureSlice& InputTexture,
 		const FIntRect& OutputViewport
 		)
 	{
@@ -150,7 +153,7 @@ namespace
 			RDG_EVENT_NAME("%s", *PassName),
 			PassParameters,
 			ERDGPassFlags::Raster,
-			[PixelShader, PassParameters, InputTexture, OutputViewport, PipelineState](
+			[PixelShader, PassParameters, OutputViewport, PipelineState](
 			FRHICommandListImmediate& RHICmdList)
 			{
 				RHICmdList.SetViewport(
@@ -166,15 +169,13 @@ namespace
 					PixelShader.GetPixelShader(),
 					*PassParameters
 					);
-				FIntVector InputTextureSize = InputTexture.TextureSRV->GetParent()->Desc.GetSize();
-				FIntRect InputViewport = InputTexture.ViewRect;
 				DrawRectangle(RHICmdList, // FRHICommandList
 					OutputViewport.Min.X, OutputViewport.Min.Y, // float X, float Y
 					OutputViewport.Width(), OutputViewport.Height(), // float SizeX, float SizeY
-					InputViewport.Min.X, InputViewport.Min.Y, // float U, float V
-					InputViewport.Width(), InputViewport.Height(), // float SizeU, float SizeV
+					0.0f, 0.0f, // float U, float V
+					1.0f, 1.0f, // float SizeU, float SizeV
 					OutputViewport.Size(), // FIntPoint TargetSize
-					FIntPoint(InputTextureSize.X, InputTextureSize.Y), // FIntPoint TextureSize
+					FIntPoint(1, 1), // FIntPoint TextureSize
 					PipelineState.VertexShader, // const TShaderRefBase VertexShader
 					EDrawRectangleFlags::EDRF_UseTriangleOptimization // EDrawRectangleFlags Flags
 					);
@@ -182,21 +183,27 @@ namespace
 			);
 	}
 
-	FVector2f GetInputViewportSize(const FIntRect& Input, const FIntPoint& Extent)
+	/** Build the shader viewport parameters for a texture slice. */
+	FScreenPassTextureViewportParameters GetInputViewportParameters(const FScreenPassTextureSlice& Slice)
 	{
-		// Based on
-		// GetScreenPassTextureViewportParameters()
-		// Engine/Source/Runtime/Renderer/Private/ScreenPass.cpp
+		return GetScreenPassTextureViewportParameters(FScreenPassTextureViewport(Slice));
+	}
 
-		FVector2f ExtentInverse = FVector2f(1.0f / Extent.X, 1.0f / Extent.Y);
+	/** Same, for a texture that is used in full. */
+	FScreenPassTextureViewportParameters GetInputViewportParameters(FRDGTextureRef Texture, const FIntRect& ViewRect)
+	{
+		return GetScreenPassTextureViewportParameters(FScreenPassTextureViewport(Texture, ViewRect));
+	}
 
-		FVector2f RectMin = FVector2f(Input.Min);
-		FVector2f RectMax = FVector2f(Input.Max);
-
-		FVector2f Min = RectMin * ExtentInverse;
-		FVector2f Max = RectMax * ExtentInverse;
-
-		return (Max - Min);
+	/** Copy a descriptor for a 2D pass target. The parent can be a texture array, such as the TSR history. */
+	FRDGTextureDesc MakePassTextureDesc(const FRDGTextureDesc& ParentDesc)
+	{
+		FRDGTextureDesc Desc = ParentDesc;
+		Desc.Reset();
+		Desc.Dimension = ETextureDimension::Texture2D;
+		Desc.ArraySize = 1;
+		Desc.Flags &= ~TexCreate_TargetArraySlicesIndependently;
+		return Desc;
 	}
 }
 
@@ -205,6 +212,7 @@ namespace
 	// RDG buffer input shared by all passes
 	BEGIN_SHADER_PARAMETER_STRUCT(FCustomLensFlarePassParameters,)
 		RENDER_TARGET_BINDING_SLOTS()
+		SHADER_PARAMETER_STRUCT(FScreenPassTextureViewportParameters, Input)
 		SHADER_PARAMETER_RDG_TEXTURE(Texture2D, InputTexture)
 	END_SHADER_PARAMETER_STRUCT()
 
@@ -240,9 +248,9 @@ namespace
 
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 			RENDER_TARGET_BINDING_SLOTS()
+			SHADER_PARAMETER_STRUCT(FScreenPassTextureViewportParameters, Input)
 			SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D, InputTexture)
 			SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
-			SHADER_PARAMETER(FVector2f, InputViewportSize)
 		END_SHADER_PARAMETER_STRUCT()
 
 		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -262,9 +270,9 @@ namespace
 
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 			RENDER_TARGET_BINDING_SLOTS()
+			SHADER_PARAMETER_STRUCT(FScreenPassTextureViewportParameters, Input)
 			SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D, InputTexture)
 			SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
-			SHADER_PARAMETER(FVector4f, InputSizeAndInvInputSize)
 			SHADER_PARAMETER(float, ThresholdLevel)
 			SHADER_PARAMETER(float, ThresholdRange)
 		END_SHADER_PARAMETER_STRUCT()
@@ -286,11 +294,11 @@ namespace
 
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 			RENDER_TARGET_BINDING_SLOTS()
+			SHADER_PARAMETER_STRUCT(FScreenPassTextureViewportParameters, Input)
 			SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D, InputTexture)
 			SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
-			SHADER_PARAMETER(FVector4f, InputSizeAndInvInputSize)
+			SHADER_PARAMETER_STRUCT(FScreenPassTextureViewportParameters, Previous)
 			SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D, PreviousTexture)
-			SHADER_PARAMETER(FVector4f, PreviousSizeAndInvInputSize)
 			SHADER_PARAMETER(float, Radius)
 		END_SHADER_PARAMETER_STRUCT()
 
@@ -356,6 +364,7 @@ namespace
 
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 			RENDER_TARGET_BINDING_SLOTS()
+			SHADER_PARAMETER_STRUCT(FScreenPassTextureViewportParameters, Input)
 			SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D, InputTexture)
 			SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
 			SHADER_PARAMETER(float, ChromaShift)
@@ -400,6 +409,7 @@ namespace
 
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 			RENDER_TARGET_BINDING_SLOTS()
+			SHADER_PARAMETER_STRUCT(FScreenPassTextureViewportParameters, Input)
 			SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D, InputTexture)
 			SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
 			SHADER_PARAMETER(float, Width)
@@ -426,6 +436,7 @@ namespace
 
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters,)
 			RENDER_TARGET_BINDING_SLOTS()
+			SHADER_PARAMETER_STRUCT(FScreenPassTextureViewportParameters, Input)
 			SHADER_PARAMETER_RDG_TEXTURE_SRV(Texture2D, InputTexture)
 			SHADER_PARAMETER_SAMPLER(SamplerState, InputSampler)
 			SHADER_PARAMETER(FIntPoint, TileCount)
@@ -503,22 +514,6 @@ namespace
 
 	IMPLEMENT_GLOBAL_SHADER(FLensFlareBloomMixPS, "/Plugin/CustomLensFlare/Mix.usf", "MixPS", SF_Pixel);
 
-	FVector4f SizeToSizeAndInvSize(FIntPoint PixelSize)
-	{
-		check(PixelSize.X != 0);
-		check(PixelSize.Y != 0);
-		return FVector4f(PixelSize.X, PixelSize.Y, 1.0 / PixelSize.X, 1.0 / PixelSize.Y);
-	}
-
-	FVector4f SizeToSizeAndInvSize(FIntVector PixelSize)
-	{
-		return SizeToSizeAndInvSize({PixelSize.X, PixelSize.Y});
-	}
-
-	FVector4f ViewToUVScaleAndPixelSize(FIntRect Viewport, FIntPoint FullSize)
-	{
-		return FVector4f(Viewport.Width() / FullSize.X, Viewport.Height() / FullSize.Y, 1.0 / FullSize.X, 1.0 / FullSize.Y);
-	}
 }
 
 
@@ -579,9 +574,9 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 	if (PerViewExtensionData == nullptr)
 	{
 		// No per-view data for this view (e.g. an offscreen render capture that didn't go through
-		// SetupViewFamily/SetupView). Skip the lens flare entirely and pass the scene color through
-		// unchanged so the underlying bloom result is preserved.
-		return FScreenPassTexture(SceneColor.TextureSRV->GetParent(), SceneColor.ViewRect);
+		// SetupViewFamily/SetupView). Return no bloom: the tonemapper adds the hook result to the
+		// image, so returning the scene color would add the image to itself.
+		return {};
 	}
 
 	RDG_GPU_STAT_SCOPE(GraphBuilder, CustomBloomFlares)
@@ -618,7 +613,6 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 	// the right Rect vs Extent sub-region. Otherwise only the full buffer
 	// resolution is gonna be reported leading to NaNs/garbage in the rendering.
 	const FScreenPassTextureViewport SceneColorViewport(SceneColor);
-	const FVector2f SceneColorViewportSize = GetInputViewportSize(SceneColorViewport.Rect, SceneColorViewport.Extent);
 
 	////////////////////////////////////////////////////////////////////////
 	// Editor buffer rescale
@@ -632,15 +626,20 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 		const TCHAR* SceneColorRescalePassName(TEXT("SceneColorRescale"));
 
 		// Build texture
-		FRDGTextureDesc Desc = SceneColor.TextureSRV->GetParent()->Desc;
-		Desc.Reset();
+		FRDGTextureDesc Desc = MakePassTextureDesc(SceneColor.TextureSRV->GetParent()->Desc);
 		Desc.Extent = SceneColorViewport.Rect.Size();
 		FRDGTextureRef RescaleTexture = GraphBuilder.CreateTexture(Desc, SceneColorRescalePassName);
-		AddCopyTexturePass(GraphBuilder, SceneColor.TextureSRV->GetParent(), RescaleTexture,
-			SceneColor.ViewRect.Min, FIntPoint::ZeroValue, SceneColor.ViewRect.Size());
 
+		FRHICopyTextureInfo CopyInfo;
+		CopyInfo.SourcePosition = FIntVector(SceneColor.ViewRect.Min.X, SceneColor.ViewRect.Min.Y, 0);
+		CopyInfo.Size = FIntVector(SceneColor.ViewRect.Width(), SceneColor.ViewRect.Height(), 1);
+		CopyInfo.SourceSliceIndex = SceneColor.TextureSRV->Desc.FirstArraySlice;
+		CopyInfo.SourceMipIndex = SceneColor.TextureSRV->Desc.MipLevel;
+		AddCopyTexturePass(GraphBuilder, SceneColor.TextureSRV->GetParent(), RescaleTexture, CopyInfo);
+
+		// The copy starts at (0,0), so the rect must too.
 		InputTexture.TextureSRV = GraphBuilder.CreateSRV(RescaleTexture);
-		InputTexture.ViewRect = SceneColorViewport.Rect;
+		InputTexture.ViewRect = FIntRect(FIntPoint::ZeroValue, SceneColorViewport.Rect.Size());
 	}
 
 	////////////////////////////////////////////////////////////////////////
@@ -655,6 +654,15 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 			InputTexture,
 			PassAmount
 			);
+	}
+
+	if (!BloomTexture.IsValid())
+	{
+		// RenderBloom returns an empty slice when PassAmount drops to 1 or less. This occurs when
+		// the viewport is too small to downsample, for example a viewport that the user scaled to a
+		// few pixels high. The flare, glare and mix passes all dereference the bloom texture, so
+		// skip the lens flare entirely and return no bloom.
+		return {};
 	}
 
 	FlareTexture = RenderFlare(GraphBuilder, BloomTexture, View);
@@ -695,8 +703,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 		};
 
 		// Create texture
-		FRDGTextureDesc Description = SceneColor.TextureSRV->GetParent()->Desc;
-		Description.Reset();
+		FRDGTextureDesc Description = MakePassTextureDesc(SceneColor.TextureSRV->GetParent()->Desc);
 		Description.Extent = MixViewport.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Black);
@@ -720,6 +727,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 
 		// Flare
 		PassParameters->Pass.InputTexture = BlackDummy.Texture;
+		PassParameters->Pass.Input = GetInputViewportParameters(BlackDummy.Texture, BlackDummy.ViewRect);
 		PassParameters->FlareIntensity = PerViewExtensionData->FlareIntensity;
 		PassParameters->FlareTint = FVector4f(PerViewExtensionData->FlareTint);
 		PassParameters->FlareGradientTexture = GWhiteTexture->TextureRHI;
@@ -739,6 +747,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::HandleBloomFlaresHook(FRD
 		if (FlareTexture.IsValid())
 		{
 			PassParameters->Pass.InputTexture = FlareTexture.Texture;
+			PassParameters->Pass.Input = GetInputViewportParameters(FlareTexture.Texture, FlareTexture.ViewRect);
 		}
 
 		if (GlareTexture.IsValid())
@@ -811,8 +820,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderThreshold(FRDGBuild
 		const TCHAR* PassName(TEXT("LensFlareDownsample"));
 
 		// Build texture
-		FRDGTextureDesc Description = InputTexture.Texture->Desc;
-		Description.Reset();
+		FRDGTextureDesc Description = MakePassTextureDesc(InputTexture.Texture->Desc);
 		Description.Extent = Viewport4.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Black);
@@ -826,7 +834,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderThreshold(FRDGBuild
 		PassParameters->InputTexture = GraphBuilder.CreateSRV(FRDGTextureSRVDesc(InputTexture.Texture));
 		PassParameters->RenderTargets[0] = FRenderTargetBinding(Texture, ERenderTargetLoadAction::ENoAction);
 		PassParameters->InputSampler = BilinearClampSampler;
-		PassParameters->InputSizeAndInvInputSize = SizeToSizeAndInvSize(InputTexture.ViewRect.Size());
+		PassParameters->Input = GetInputViewportParameters(InputTexture.Texture, InputTexture.ViewRect);
 		PassParameters->ThresholdLevel = PerViewExtensionData->ThresholdLevel;
 		PassParameters->ThresholdRange = PerViewExtensionData->ThresholdRange;
 
@@ -837,7 +845,6 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderThreshold(FRDGBuild
 			VertexShader,
 			PixelShader,
 			ClearBlendState,
-			FScreenPassTextureSlice(GraphBuilder.CreateSRV(InputTexture.Texture), Viewport2),
 			Viewport4
 			);
 
@@ -875,8 +882,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 		const TCHAR* PassName(TEXT("LensFlareChromaGhost"));
 
 		// Build buffer
-		FRDGTextureDesc Description = BloomTexture.TextureSRV->GetParent()->Desc;
-		Description.Reset();
+		FRDGTextureDesc Description = MakePassTextureDesc(BloomTexture.TextureSRV->GetParent()->Desc);
 		Description.Extent = Viewport2.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Black);
@@ -889,6 +895,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 		FLensFlareChromaPS::FParameters* PassParameters = GraphBuilder.AllocParameters<
 			FLensFlareChromaPS::FParameters>();
 		PassParameters->InputTexture = BloomTexture.TextureSRV;
+		PassParameters->Input = GetInputViewportParameters(BloomTexture);
 		PassParameters->RenderTargets[0] = FRenderTargetBinding(ChromaTexture, ERenderTargetLoadAction::ENoAction);
 		PassParameters->InputSampler = BilinearBorderSampler;
 		PassParameters->ChromaShift = PerViewExtensionData->GhostChromaShift;
@@ -909,8 +916,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 		const TCHAR* PassName(TEXT("LensFlareGhosts"));
 
 		// Build buffer
-		FRDGTextureDesc Description = BloomTexture.TextureSRV->GetParent()->Desc;
-		Description.Reset();
+		FRDGTextureDesc Description = MakePassTextureDesc(BloomTexture.TextureSRV->GetParent()->Desc);
 		Description.Extent = Viewport2.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Transparent);
@@ -923,6 +929,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 		FLensFlareGhostsPS::FParameters* PassParameters = GraphBuilder.AllocParameters<
 			FLensFlareGhostsPS::FParameters>();
 		PassParameters->Pass.InputTexture = ChromaTexture;
+		PassParameters->Pass.Input = GetInputViewportParameters(ChromaTexture, Viewport2);
 		PassParameters->Pass.RenderTargets[0] = FRenderTargetBinding(Texture, ERenderTargetLoadAction::ENoAction);
 		PassParameters->InputSampler = BilinearBorderSampler;
 		PassParameters->Intensity = PerViewExtensionData->GhostIntensity;
@@ -968,6 +975,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderFlare(FRDGBuilder& 
 
 		FLensFlareHaloPS::FParameters* PassParameters = GraphBuilder.AllocParameters<FLensFlareHaloPS::FParameters>();
 		PassParameters->InputTexture = BloomTexture.TextureSRV;
+		PassParameters->Input = GetInputViewportParameters(BloomTexture);
 		PassParameters->RenderTargets[0] = FRenderTargetBinding(OutputTexture.Texture, ERenderTargetLoadAction::ELoad);
 		PassParameters->InputSampler = BilinearBorderSampler;
 		PassParameters->Intensity = PerViewExtensionData->HaloIntensity;
@@ -1034,8 +1042,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderGlare(FRDGBuilder& 
 			);
 
 		// Build the buffer
-		FRDGTextureDesc Description = BloomTexture.TextureSRV->GetParent()->Desc;
-		Description.Reset();
+		FRDGTextureDesc Description = MakePassTextureDesc(BloomTexture.TextureSRV->GetParent()->Desc);
 		Description.Extent = Viewport4.Size();
 		Description.Format = PF_FloatRGB;
 		Description.ClearValue = FClearValueBinding(FLinearColor::Transparent);
@@ -1056,6 +1063,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderGlare(FRDGBuilder& 
 		// Vertex shader
 		FLensFlareGlareVS::FParameters* VertexParameters = GraphBuilder.AllocParameters<FLensFlareGlareVS::FParameters>();
 		VertexParameters->InputTexture = BloomTexture.TextureSRV;
+		VertexParameters->Input = GetInputViewportParameters(BloomTexture);
 		VertexParameters->RenderTargets[0] = FRenderTargetBinding(GlareTexture, ERenderTargetLoadAction::EClear);
 		VertexParameters->InputSampler = BilinearBorderSampler;
 		VertexParameters->TileCount = TileCount;
@@ -1183,8 +1191,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderBlur(FRDGBuilder& G
 	for (int32 i = 0; i < ArraySize; i++)
 	{
 		// Build texture
-		FRDGTextureDesc BlurDesc = InputDescription;
-		BlurDesc.Reset();
+		FRDGTextureDesc BlurDesc = MakePassTextureDesc(InputDescription);
 		BlurDesc.Extent = Viewports[i].Size();
 		BlurDesc.Format = PF_FloatRGB;
 		BlurDesc.NumMips = 1;
@@ -1210,6 +1217,8 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderBlur(FRDGBuilder& G
 			FKawaseBlurDownPS::FParameters* PassDownParameters = GraphBuilder.AllocParameters<
 				FKawaseBlurDownPS::FParameters>();
 			PassDownParameters->Pass.InputTexture = PreviousBuffer;
+			PassDownParameters->Pass.Input =
+				GetInputViewportParameters(PreviousBuffer, i == 0 ? InputTexture.ViewRect : Viewports[i - 1]);
 			PassDownParameters->Pass.RenderTargets[0] =
 				FRenderTargetBinding(Buffer, ERenderTargetLoadAction::ENoAction);
 			PassDownParameters->InputSampler = BilinearClampSampler;
@@ -1222,7 +1231,6 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderBlur(FRDGBuilder& G
 				VertexShader,
 				PixelShaderDown,
 				ClearBlendState,
-				FScreenPassTextureSlice(GraphBuilder.CreateSRV(PreviousBuffer), i == 0 ? InputTexture.ViewRect : Viewports[i - 1]),
 				Viewports[i]
 				);
 		}
@@ -1231,6 +1239,7 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderBlur(FRDGBuilder& G
 			FKawaseBlurUpPS::FParameters* PassUpParameters = GraphBuilder.AllocParameters<
 				FKawaseBlurUpPS::FParameters>();
 			PassUpParameters->Pass.InputTexture = PreviousBuffer;
+			PassUpParameters->Pass.Input = GetInputViewportParameters(PreviousBuffer, Viewports[i - 1]);
 			PassUpParameters->Pass.RenderTargets[0] = FRenderTargetBinding(Buffer, ERenderTargetLoadAction::ENoAction);
 			PassUpParameters->InputSampler = BilinearClampSampler;
 			PassUpParameters->BufferSize = ViewportResolution;
@@ -1242,7 +1251,6 @@ FScreenPassTexture FCustomLensFlareSceneViewExtension::RenderBlur(FRDGBuilder& G
 				VertexShader,
 				PixelShaderUp,
 				ClearBlendState,
-				FScreenPassTextureSlice(GraphBuilder.CreateSRV(PreviousBuffer), Viewports[i - 1]),
 				Viewports[i]
 				);
 		}
@@ -1359,8 +1367,7 @@ FScreenPassTextureSlice FCustomLensFlareSceneViewExtension::FBloomFlareProcess::
 {
 	const FCustomLensFlareSceneViewExtensionData::FPerViewExtensionData* PerViewExtensionData = GetPerViewExtensionData(View);
 	// Build texture
-	FRDGTextureDesc Description = InputTexture.TextureSRV->GetParent()->Desc;
-	Description.Reset();
+	FRDGTextureDesc Description = MakePassTextureDesc(InputTexture.TextureSRV->GetParent()->Desc);
 	Description.Extent = Viewport.Size();
 	Description.Format = PF_FloatRGB;
 	Description.ClearValue = FClearValueBinding(FLinearColor::Black);
@@ -1375,8 +1382,7 @@ FScreenPassTextureSlice FCustomLensFlareSceneViewExtension::FBloomFlareProcess::
 	PassParameters->InputTexture = InputTexture.TextureSRV;
 	PassParameters->RenderTargets[0] = FRenderTargetBinding(TargetTexture, ERenderTargetLoadAction::ENoAction);
 	PassParameters->InputSampler = OwningExtension.BilinearBorderSampler;
-	FIntVector ParentPixelSize = InputTexture.TextureSRV->GetParent()->Desc.GetSize();
-	PassParameters->InputSizeAndInvInputSize = SizeToSizeAndInvSize(ParentPixelSize);
+	PassParameters->Input = GetInputViewportParameters(InputTexture);
 	PassParameters->ThresholdLevel = View.FinalPostProcessSettings.BloomThreshold;
 	PassParameters->ThresholdRange = PerViewExtensionData->ThresholdRange;
 
@@ -1387,7 +1393,6 @@ FScreenPassTextureSlice FCustomLensFlareSceneViewExtension::FBloomFlareProcess::
 		VertexShader,
 		PixelShader,
 		OwningExtension.ClearBlendState,
-		InputTexture,
 		Viewport
 		);
 
@@ -1398,8 +1403,7 @@ FScreenPassTextureSlice FCustomLensFlareSceneViewExtension::FBloomFlareProcess::
 FScreenPassTextureSlice FCustomLensFlareSceneViewExtension::FBloomFlareProcess::RenderUpsampleCombine(FRDGBuilder& GraphBuilder, const FString& PassName, const FViewInfo& View, const FScreenPassTextureSlice& InputTexture, const FScreenPassTextureSlice& PreviousTexture, float Radius)
 {
 	// Build texture
-	FRDGTextureDesc Description = InputTexture.TextureSRV->GetParent()->Desc;
-	Description.Reset();
+	FRDGTextureDesc Description = MakePassTextureDesc(InputTexture.TextureSRV->GetParent()->Desc);
 	Description.Extent = InputTexture.ViewRect.Size();
 	Description.Format = PF_FloatRGB;
 	Description.ClearValue = FClearValueBinding(FLinearColor::Black);
@@ -1413,11 +1417,9 @@ FScreenPassTextureSlice FCustomLensFlareSceneViewExtension::FBloomFlareProcess::
 	PassParameters->InputTexture = InputTexture.TextureSRV;
 	PassParameters->RenderTargets[0] = FRenderTargetBinding(TargetTexture, ERenderTargetLoadAction::ENoAction);
 	PassParameters->InputSampler = OwningExtension.BilinearClampSampler;
-	FIntVector InputTextureSize = InputTexture.TextureSRV->GetParent()->Desc.GetSize();
-	PassParameters->InputSizeAndInvInputSize = ViewToUVScaleAndPixelSize(InputTexture.ViewRect, {InputTextureSize.X, InputTextureSize.Y});
+	PassParameters->Input = GetInputViewportParameters(InputTexture);
 	PassParameters->PreviousTexture = PreviousTexture.TextureSRV;
-	FIntVector PreviousTextureSize = PreviousTexture.TextureSRV->GetParent()->Desc.GetSize();
-	PassParameters->PreviousSizeAndInvInputSize = ViewToUVScaleAndPixelSize(PreviousTexture.ViewRect, {PreviousTextureSize.X, PreviousTextureSize.Y});
+	PassParameters->Previous = GetInputViewportParameters(PreviousTexture);
 	PassParameters->Radius = Radius;
 
 	DrawSplitResolutionPass(
@@ -1427,7 +1429,6 @@ FScreenPassTextureSlice FCustomLensFlareSceneViewExtension::FBloomFlareProcess::
 		VertexShader,
 		PixelShader,
 		OwningExtension.ClearBlendState,
-		InputTexture,
 		InputTexture.ViewRect
 		);
 

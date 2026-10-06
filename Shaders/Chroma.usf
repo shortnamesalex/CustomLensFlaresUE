@@ -11,7 +11,7 @@ void ChromaPS(
 	float2 UVr = (UV - CenterPoint) * (1.0f + ChromaShift) + CenterPoint;
 	float2 UVb = (UV - CenterPoint) * (1.0f - ChromaShift) + CenterPoint;
 
-	OutColor.r = Texture2DSample(InputTexture, InputSampler, UVr ).r;
-	OutColor.g = Texture2DSample(InputTexture, InputSampler, UV  ).g;
-	OutColor.b = Texture2DSample(InputTexture, InputSampler, UVb ).b;
+	OutColor.r = SampleInput(UVr).r;
+	OutColor.g = SampleInput(UV ).g;
+	OutColor.b = SampleInput(UVb).b;
 }

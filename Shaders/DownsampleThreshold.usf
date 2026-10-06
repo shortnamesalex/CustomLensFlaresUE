@@ -1,6 +1,5 @@
 #include "Shared.ush"
 
-float4 InputSizeAndInvInputSize;
 float ThresholdLevel;
 float ThresholdRange;
 
@@ -34,7 +33,7 @@ float3 Downsample( Texture2D Texture, SamplerState Sampler, float2 UV, float2 Pi
 	UNROLL
 	for( int i = 0; i < 13; i++ )
 	{
-		float2 CurrentUV = UV + Coords[i] * PixelSize;
+		float2 CurrentUV = ClampInputUV( UV + Coords[i] * PixelSize );
 		OutColor += Weights[i] * Texture2DSample(Texture, Sampler, CurrentUV ).rgb;
 	}
 
@@ -50,14 +49,26 @@ void DownsamplePS(
 	in noperspective float4 UVAndScreenPos : TEXCOORD0,
 	out float3 OutColor : SV_Target0 )
 {
-	float2 InvPixelSize = (InputSizeAndInvInputSize.zw) * 0.5;
-	float2 UV = UVAndScreenPos.xy;
+	float2 InvPixelSize = Input_ExtentInverse * 0.5f;
+	float2 UV = InputUV( UVAndScreenPos.xy );
 	OutColor.rgb = Downsample( InputTexture, InputSampler, UV, InvPixelSize );
 }
 
+SCREEN_PASS_TEXTURE_VIEWPORT(Previous)
 Texture2D PreviousTexture;
-float4 PreviousSizeAndInvInputSize;
 float Radius;
+
+/** Map a 0..1 pass UV onto the sub-region of PreviousTexture that its viewport uses. */
+float2 PreviousUV(float2 UV)
+{
+	return Previous_UVViewportMin + UV * Previous_UVViewportSize;
+}
+
+/** Clamp a previous-texture UV to the bilinear-safe bounds of its viewport. */
+float2 ClampPreviousUV(float2 InUV)
+{
+	return clamp(InUV, Previous_UVViewportBilinearMin, Previous_UVViewportBilinearMax);
+}
 
 float3 Upsample( Texture2D Texture, SamplerState Sampler, float2 UV, float2 PixelSize )
 {
@@ -78,7 +89,7 @@ float3 Upsample( Texture2D Texture, SamplerState Sampler, float2 UV, float2 Pixe
 	UNROLL
 	for( int i = 0; i < 9; i++ )
 	{
-		float2 CurrentUV = UV + Coords[i] * PixelSize;
+		float2 CurrentUV = ClampPreviousUV( UV + Coords[i] * PixelSize );
 		Color += Weights[i] * Texture2DSampleLevel(Texture, Sampler, CurrentUV, 0).rgb;
 	}
 
@@ -91,8 +102,9 @@ void UpsampleCombinePS(
 {
 	float2 UV = UVAndScreenPos.xy;
 
-	float3 CurrentColor = Texture2DSampleLevel( InputTexture, InputSampler, UV * InputSizeAndInvInputSize.xy, 0).rgb;
-	float3 PreviousColor = Upsample( PreviousTexture, InputSampler, UV, PreviousSizeAndInvInputSize.zw );
+	// Each input has its own viewport, so map the pass UV into each one separately.
+	float3 CurrentColor = SampleInput( UV );
+	float3 PreviousColor = Upsample( PreviousTexture, InputSampler, PreviousUV(UV), Previous_ExtentInverse );
 
 	OutColor.rgb = lerp(CurrentColor, PreviousColor, Radius);
 }

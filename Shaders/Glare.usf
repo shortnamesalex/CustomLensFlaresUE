@@ -71,7 +71,7 @@ void GlareVS(
     UNROLL
     for( int i = 0; i < 5; i++ )
     {
-        float2 CurrentUV = CenterUV + Coords[i] * PixelSize.xy * 1.5f;
+        float2 CurrentUV = ClampedInputUV( CenterUV + Coords[i] * PixelSize.xy * 1.5f );
         Color += Weights[i] * Texture2DSampleLevel(InputTexture, InputSampler, CurrentUV, 0).rgb;
     }
 
