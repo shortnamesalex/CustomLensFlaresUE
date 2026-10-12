@@ -4,7 +4,11 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "Engine/BlendableInterface.h"
+#include "Engine/DataAsset.h"
 #include "CustomLensFlareConfig.generated.h"
+
+class UTexture2D;
 
 // This custom struct is used to more easily
 // setup and organize the settings for the Ghosts

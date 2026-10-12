@@ -23,7 +23,7 @@ void GhostsPS(
 			float Mask  = smoothstep( 0.5f, 0.9f, DistanceMask );
 			float Mask2 = smoothstep( 0.75f, 1.0f, DistanceMask ) * 0.95f + 0.05f;
 
-			Color += Texture2DSample(InputTexture, InputSampler, NewUV + 0.5f ).rgb
+			Color += SampleInput( NewUV + 0.5f )
 					* GhostColors[i].rgb
 					* GhostColors[i].a
 					* Mask * Mask2;
