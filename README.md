@@ -1,6 +1,9 @@
-This fork is mainly a quality-of-life thing, adding in some extra textures and ironing out weird quirks. No big changes are planned and this fork will be updated alongside the original repository.
+This fork is mainly for quality-of-life additions such as extra presets and textures to make it more usable right out of the box. No big changes are planned and the fork will be updated along with the main repo.
 <img width="2559" height="1371" alt="image" src="https://github.com/user-attachments/assets/5646f496-9450-496b-9106-6f983205d2f4" />
 
+## Further Engine Changes
+
+You can make Unreal automatically reference a data asset to every project by adding the reference inside its `BaseEngine.ini` folder.
 
 # ORIGINAL DESCRIPTION
 ![Lens Flares Screenshot in Editor](screenshot.png)
